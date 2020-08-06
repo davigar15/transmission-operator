@@ -1,0 +1,20 @@
+name: transmission
+summary: A Transmission Server K8s charm
+description: |
+    Transmission
+series:
+   - kubernetes
+min-juju-version: 2.7.5
+storage:
+  config:
+    type: filesystem
+    location: /config
+  downloads:
+    type: filesystem
+    location: /downloads
+  watch:
+    type: filesystem
+    location: /watch
+deployment:
+  type: stateful
+  service: cluster #loadbalancer

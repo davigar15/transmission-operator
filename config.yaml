@@ -1,0 +1,33 @@
+options:
+  image:
+    type: string
+    default: linuxserver/transmission
+    description: The docker image to install.
+  http-port:
+    type: int
+    description: Port
+    default: 9091
+  port:
+    type: int
+    description: Torrent TCP/UDP Port
+    default: 51413
+  puid:
+    type: int
+    description: User ID
+    default: 1000
+  pgid:
+    type: int
+    description: Group ID
+    default: 1000
+  user:
+    type: string
+    description: User
+    default: transmission
+  pass:
+    type: string
+    description: Password
+    default: transmission
+  timezone:
+    type: string
+    description: Timezone code. See https://en.wikipedia.org/wiki/List_of_tz_database_time_zones.
+    default: ES

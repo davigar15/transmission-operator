@@ -1,0 +1,3 @@
+[submodule "mod/ops"]
+	path = mod/ops
+	url = https://github.com/canonical/operator.git
