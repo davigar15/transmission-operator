@@ -4,7 +4,7 @@ description: |
     Transmission
 series:
    - kubernetes
-min-juju-version: 2.7.5
+min-juju-version: 2.8.0
 storage:
   config:
     type: filesystem
@@ -17,4 +17,4 @@ storage:
     location: /watch
 deployment:
   type: stateful
-  service: cluster #loadbalancer
+  service: cluster

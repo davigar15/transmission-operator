@@ -1,93 +1,217 @@
 #!/usr/bin/env python3
 
-import sys
-
-sys.path.append("lib")
-
 import logging
-import base64
+
+from urllib.parse import urlparse
 
 from ops.charm import CharmBase
-from ops.framework import StoredState
+
+# from ops.framework import StoredState
 from ops.main import main
 from ops.model import (
     ActiveStatus,
     BlockedStatus,
-    MaintenanceStatus,
-    WaitingStatus,
-    ModelError,
+    # MaintenanceStatus,
+    # WaitingStatus,
+    # ModelError,
 )
 
 logger = logging.getLogger(__name__)
 
+REQUIRED_SETTINGS = ["user", "pass"]
+# Secrets
+USER_SECRET_PATH = "/secrets/user"
+USER_SECRET_KEY_NAME = "user"
+PASS_SECRET_PATH = "/secrets/pass"
+PASS_SECRET_KEY_NAME = "pass"
+
+# We expect the transmission container to use the
+# default ports
+HTTP_PORT = 9091
+TORRENT_PORT = 51413
+
 
 class TransmissionCharm(CharmBase):
-    state = StoredState()
-
     def __init__(self, *args):
         super().__init__(*args)
 
-        self.state.set_default(spec=None)
-
         # Register all of the events we want to observe
-        self.framework.observe(self.on.config_changed, self.on_config_changed)
-        self.framework.observe(self.on.start, self.on_start)
-        self.framework.observe(self.on.upgrade_charm, self.on_upgrade_charm)
+        self.framework.observe(self.on.config_changed, self.configure_pod)
+        self.framework.observe(self.on.start, self.configure_pod)
+        self.framework.observe(self.on.upgrade_charm, self.configure_pod)
 
-    def _apply_spec(self):
-        unit = self.framework.model.unit
-        if not unit.is_leader():
-            unit.status = ActiveStatus()
-            return
-        new_spec = self.make_pod_spec()
-        if new_spec == self.state.spec:
-            unit.status = ActiveStatus()
-            return
+    def _check_password(self, password):
+        if len(password) < 8:
+            return "password must have at least 8 characters"
 
-        self.framework.model.pod.set_spec(new_spec)
-        self.state.spec = new_spec
-        unit.status = ActiveStatus()
+    def _check_settings(self):
+        problems = []
+        config = self.model.config
 
-    def make_pod_spec(self):
-        config = self.framework.model.config
+        for setting in REQUIRED_SETTINGS:
+            if not config.get(setting):
+                problem = f"missing config {setting}"
+                problems.append(problem)
 
-        ports = [
-            {"name": "http", "containerPort": config["http-port"], "protocol": "TCP"},
-            {"name": "torrent-tcp", "containerPort": config["port"], "protocol": "TCP"},
-            {"name": "torrent-udp", "containerPort": config["port"], "protocol": "UDP"},
+        passwd_problem = self._check_password(config["pass"])
+        if passwd_problem:
+            problems.append(passwd_problem)
+        return ";".join(problems)
+
+    def _make_pod_image_details(self):
+        config = self.model.config
+        image_details = {
+            "imagePath": config["transmission_image_path"],
+        }
+        if config["transmission_image_username"]:
+            image_details.update(
+                {
+                    "username": config["transmission_image_username"],
+                    "password": config["transmission_image_password"],
+                }
+            )
+        return image_details
+
+    def _make_pod_ports(self):
+        return [
+            {"name": "http", "containerPort": HTTP_PORT, "protocol": "TCP"},
+            {"name": "tcp", "containerPort": TORRENT_PORT, "protocol": "TCP",},
+            {"name": "udp", "containerPort": TORRENT_PORT, "protocol": "UDP",},
         ]
 
-        spec = {
+    def _make_pod_envconfig(self):
+        config = self.model.config
+
+        return {
+            "PUID": config["puid"],
+            "PGID": config["pgid"],
+            "FILE__USER": USER_SECRET_PATH,
+            "FILE__PASS": PASS_SECRET_PATH,
+            "TZ": config["timezone"],
+        }
+
+    def _make_pod_command(self):
+        return [
+            "sh",
+            "-c",
+            "echo -e 'ID=ubuntu\nVERSION_ID=\"20.04\"' > /etc/os-release && /init",
+        ]
+
+    def _make_pod_volume_config(self):
+        return [
+            {
+                "name": "secrets",
+                "mountPath": "/secrets",
+                "secret": {
+                    "name": f"{self.app.name}-secrets",
+                    "files": [
+                        {"key": USER_SECRET_KEY_NAME, "path": "user", "mode": 0o444,},
+                        {"key": PASS_SECRET_KEY_NAME, "path": "pass", "mode": 0o444,},
+                    ],
+                },
+            }
+        ]
+
+    def _make_pod_ingress_resources(self):
+        site_url = self.model.config["site_url"]
+
+        if not site_url:
+            return
+
+        parsed = urlparse(site_url)
+
+        if not parsed.scheme.startswith("http"):
+            return
+
+        max_file_size = self.model.config["max_file_size"]
+        ingress_whitelist_source_range = self.model.config[
+            "ingress_whitelist_source_range"
+        ]
+
+        annotations = {
+            "nginx.ingress.kubernetes.io/proxy-body-size": "{}m".format(max_file_size)
+        }
+
+        if ingress_whitelist_source_range:
+            annotations[
+                "nginx.ingress.kubernetes.io/whitelist-source-range"
+            ] = ingress_whitelist_source_range
+
+        ingress = {
+            "name": "{}-ingress".format(self.app.name),
+            "annotations": annotations,
+            "spec": {
+                "rules": [
+                    {
+                        "host": parsed.hostname,
+                        "http": {
+                            "paths": [
+                                {
+                                    "path": "/",
+                                    "backend": {
+                                        "serviceName": self.app.name,
+                                        "servicePort": HTTP_PORT,
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                ]
+            },
+        }
+        return [ingress]
+
+    def _make_pod_secrets(self):
+        return [
+            {
+                "name": f"{self.app.name}-secrets",
+                "type": "Opaque",
+                "stringData": {
+                    USER_SECRET_KEY_NAME: self.model.config["user"],
+                    PASS_SECRET_KEY_NAME: self.model.config["pass"],
+                },
+            }
+        ]
+
+    def configure_pod(self, event):
+        # Continue only if the unit is the leader
+        if not self.unit.is_leader():
+            self.unit.status = ActiveStatus()
+            return
+        # Check problems in the settings
+        problems = self._check_settings()
+        if problems:
+            self.unit.status = BlockedStatus(problems)
+            return
+
+        self.unit.status = BlockedStatus("Assembling pod spec")
+        image_details = self._make_pod_image_details()
+        ports = self._make_pod_ports()
+        env_config = self._make_pod_envconfig()
+        command = self._make_pod_command()
+        volume_config = self._make_pod_volume_config()
+        ingress_resources = self._make_pod_ingress_resources()
+        secrets = self._make_pod_secrets()
+
+        pod_spec = {
+            "version": 3,
             "containers": [
                 {
                     "name": self.framework.model.app.name,
-                    "image": config["image"],
+                    "imageDetails": image_details,
                     "ports": ports,
-                    "config": {
-                        "PUID": config["puid"],
-                        "PGID": config["pgid"],
-                        "USER": config["user"],
-                        "PASS": config["pass"],
-                        "TZ": config["timezone"],
-                    },
+                    "envConfig": env_config,
+                    "command": command,
+                    "volumeConfig": volume_config,
                 }
             ],
+            "kubernetesResources": {
+                "ingressResources": ingress_resources or [],
+                "secrets": secrets,
+            },
         }
-
-        return spec
-
-    def on_config_changed(self, event):
-        """Handle changes in configuration"""
-        self._apply_spec()
-
-    def on_start(self, event):
-        """Called when the charm is being installed"""
-        self._apply_spec()
-
-    def on_upgrade_charm(self, event):
-        """Upgrade the charm."""
-        unit = self.model.unit
-        unit.status = MaintenanceStatus("Upgrading charm")
+        self.model.pod.set_spec(pod_spec)
+        self.unit.status = ActiveStatus()
 
 
 if __name__ == "__main__":

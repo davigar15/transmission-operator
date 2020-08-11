@@ -1,16 +1,18 @@
 options:
-  image:
+  transmission_image_path:
     type: string
     default: linuxserver/transmission
     description: The docker image to install.
-  http-port:
-    type: int
-    description: Port
-    default: 9091
-  port:
-    type: int
-    description: Torrent TCP/UDP Port
-    default: 51413
+  transmission_image_username:
+    type: string
+    description: |
+      The username for accessing the registry specified in transmission_image_path.
+    default: ""
+  transmission_image_password:
+    type: string
+    description: |
+      The password associated with transmission_image_username for accessing the registry specified in transmission_image_path.
+    default: ""
   puid:
     type: int
     description: User ID
@@ -31,3 +33,22 @@ options:
     type: string
     description: Timezone code. See https://en.wikipedia.org/wiki/List_of_tz_database_time_zones.
     default: ES
+  site_url:
+    type: string
+    description: Ingress URL to access Transmission Web UI
+    default: ""
+  max_file_size:
+    type: int
+    description: |
+      The maximum file size, in megabytes.
+
+      If there is a reverse proxy in front of Transmission, it may
+      need to be configured to handle the requested size.
+    default: 5
+  ingress_whitelist_source_range:
+    type: string
+    description: |
+      A comma-separated list of CIDRs to store in the ingress.kubernetes.io/whitelist-source-range annotation.
+
+      This can be used to lock down access to Transmission based on source IP address.
+    default: ""
