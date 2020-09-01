@@ -137,6 +137,16 @@ class TransmissionCharm(CharmBase):
                 "nginx.ingress.kubernetes.io/whitelist-source-range"
             ] = ingress_whitelist_source_range
 
+        ingress_spec_tls = None
+
+        if parsed.scheme == "https":
+            ingress_spec_tls = [{"hosts": [parsed.hostname]}]
+            tls_secret_name = self.model.config["tls_secret_name"]
+            if tls_secret_name:
+                ingress_spec_tls[0]["secretName"] = tls_secret_name
+        else:
+            annotations["nginx.ingress.kubernetes.io/ssl-redirect"] = "false"
+
         ingress = {
             "name": "{}-ingress".format(self.app.name),
             "annotations": annotations,
@@ -156,9 +166,12 @@ class TransmissionCharm(CharmBase):
                             ]
                         },
                     }
-                ]
+                ],
             },
         }
+        if ingress_spec_tls:
+            ingress["spec"]["tls"] = ingress_spec_tls
+
         return [ingress]
 
     def _make_pod_secrets(self):

@@ -52,3 +52,7 @@ options:
 
       This can be used to lock down access to Transmission based on source IP address.
     default: ""
+  tls_secret_name:
+    type: string
+    description: TLS Secret name
+    default: ""
